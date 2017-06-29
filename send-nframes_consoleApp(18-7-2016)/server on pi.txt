@@ -1,0 +1,553 @@
+/*
+ * server.c
+ *
+ *  Created on: Jul 4, 2016
+ *      Author: giahoang
+ */
+
+
+/* A simple server in the internet domain using TCP
+   The port number is passed as an argument */
+
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/stat.h>
+
+#include <sys/ioctl.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/videodev2.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>	//open() close() read() write()
+#include <stdlib.h>	//exit()
+
+#define DEFAULTPORT "27015"
+#define BUFFER_SIZE 614400	//YUYV 	//921600 bitmap RGB 24bit
+#define TOTAL_FRAMES	30
+
+
+void fwriteData(FILE* fp,void* data, int width, int height, int nChannels, int padding){
+	int n;
+	unsigned char *bytes = data;
+	int BytesPerRow = width*nChannels  + padding;	//	chia het cho 4
+	int BytesSize = BytesPerRow * height;
+	if(!fp){
+		printf("file not founded");
+	}
+
+	for(n = BytesPerRow; n <= BytesSize; n+=BytesPerRow){
+		fwrite(bytes+BytesSize-n,1,BytesPerRow,fp);
+	}
+
+}
+
+// unsigned char : 1byte, short int 2 bytes, int 4 bytes, long int 8 bytes;	for Intel
+int createBMPfile(char* filename, void* data, int width, int height, int nChannels, int padding){
+	unsigned short int word[1]; /* 2 bytes */
+	unsigned int dword[1]; 		/* 4 bytes */
+
+	unsigned int	Width= width,	Height=height;
+				   /* in bytes */
+	unsigned int   FileHeaderSize=14,
+				   InfoHeaderSize=40, // header_bytes
+				   BytesPerRow,
+				   FileSize,
+				   OffsetBits,
+				   BytesSize; // full size of the file including the header, the pixel data, and all padding
+
+	//PRINT
+	BytesPerRow = Width*nChannels  + padding;	//(((Width * bpp)+31)/32)*4;	chia het cho 4
+	BytesSize = BytesPerRow*Height;	//kich thuoc data anh tinh theo byte
+	FileSize = FileHeaderSize+InfoHeaderSize+BytesSize;	//+PaletteSize;
+	OffsetBits = FileHeaderSize+InfoHeaderSize;//+PaletteSize;
+
+//	printf("BytesPerRow= %d\n", BytesPerRow);
+//	printf("BytesSize= %d\n", BytesSize);
+//	printf("FileSize= %d\n", FileSize);
+//	printf("OffsetBits= %d\n", OffsetBits);
+
+
+	FILE *fp = fopen(filename, "wb"); /* b - binary mode */
+	/* bmp file header */
+	word[0]=19778;                                         fwrite(word,1,2,fp); /* file Type signature = BM */
+	dword[0]=FileSize;                                     fwrite(dword,1,4,fp); /* FileSize */
+	word[0]=0;                                             fwrite(word,1,2,fp); /* reserved1 */
+	word[0]=0;                                             fwrite(word,1,2,fp); /* reserved2 */
+	dword[0]=OffsetBits;                                   fwrite(dword,1,4,fp); /* OffsetBits */
+	dword[0]=InfoHeaderSize;                               fwrite(dword,1,4,fp);
+	dword[0]=Width;                                        fwrite(dword,1,4,fp);
+	dword[0]=Height;                                       fwrite(dword,1,4,fp);
+	word[0]=1;                                             fwrite(word,1,2,fp); /* planes */	//The number of color planes, must be set to 1
+	word[0]=24;                                            fwrite(word,1,2,fp); /* Bits of color per pixel */ //The number of bits per pixel. For an RGB image with a single byte for each color channel the value would be 24
+	dword[0]=0;                                            fwrite(dword,1,4,fp); /* compression type */	// 0: no compression
+	dword[0]=BytesSize;                                    fwrite(dword,1,4,fp); /* Image Data Size, set to 0 when no compression */
+	dword[0]=2835;                                         fwrite(dword,1,4,fp); /* This is the horizontal resolution */
+	dword[0]=2835;                                         fwrite(dword,1,4,fp); /* This is the vertical resolution */
+	dword[0]=0;                                            fwrite(dword,1,4,fp); /*  number of used colors, default:0 all colors*/
+	dword[0]=0;                                            fwrite(dword,1,4,fp); /* The important colors, leave at 0 to default to all colors */
+
+	//pixel data
+	fwriteData(fp,data,Width,Height,nChannels,padding);
+
+	fclose(fp);
+	printf("file saved %s\n",filename);
+	return 0;
+}
+
+typedef struct _BITMAP4{
+	unsigned char r;    //1 byte * 4 = 4 byte = 1 int
+	unsigned char g;
+	unsigned char b;
+	//unsigned char a;
+} BITMAP4;
+
+BITMAP4 YUV_to_Bitmap(int y,int u,int v)
+{
+	int r,g,b;
+	BITMAP4 bm = {0,0,0};	//{0,0,0,0};
+
+	// u and v are +-0.5
+	u -= 128;
+	v -= 128;
+	// Conversion
+	r = y + 1.370705 * v;
+	g = y - 0.698001 * v - 0.337633 * u;
+	b = y + 1.732446 * u;
+	// Clamp to 0..1
+	if (r < 0) r = 0;
+	if (g < 0) g = 0;
+	if (b < 0) b = 0;
+	if (r > 255) r = 255;
+	if (g > 255) g = 255;
+	if (b > 255) b = 255;
+	///V4L2_PIX_FMT_RGB24   ,   V4L2_PIX_FMT_BGR24
+	bm.r = r;
+	bm.g = g;
+	bm.b = b;
+	//bm.a = 0;
+
+	return(bm);
+}
+
+void yuyv2rgb(int* yuyv_2_pixels, BITMAP4* rgb1, BITMAP4* rgb2){
+	int y1,y2,u,v;
+
+	//http://v4l.videotechnology.com/dwg/v4l2.html#V4L2-PIX-FMT-YUYV
+	y1  = ((*yuyv_2_pixels & 0x000000ff));
+	u  = ((*yuyv_2_pixels & 0x0000ff00)>>8);
+	y2  = ((*yuyv_2_pixels & 0x00ff0000)>>16);
+	v = ((*yuyv_2_pixels & 0xff000000)>>24);
+	//yuv to rgb
+	*rgb1 = YUV_to_Bitmap(y1,u,v);
+	*rgb2 = YUV_to_Bitmap(y2,u,v);
+}
+
+void cvtYUYV2RGBImage(void* buffer, int width, int height, int nChannels, void* output){
+	int *yuyvpixels = buffer;    //get 2 pixels = 4 bytes
+	unsigned char *buffer_char = output;    //1 byte
+
+	int i = 0;
+	int numOfPixels =  width*height/2;
+	int i_rgb = 0;
+	for(i = 0; i< numOfPixels ; i++){
+		BITMAP4 rgb1,rgb2;
+		yuyv2rgb(&yuyvpixels[i],&rgb1,&rgb2);	//6bytes = 2pixels rgb
+
+     	buffer_char[i_rgb]   = rgb1.b;
+		buffer_char[i_rgb+1] = rgb1.g;
+		buffer_char[i_rgb+2] = rgb1.r;
+
+		buffer_char[i_rgb+3] = rgb2.b;
+		buffer_char[i_rgb+4] = rgb2.g;
+		buffer_char[i_rgb+5] = rgb2.r;
+
+		i_rgb +=6;
+
+	}
+
+}
+
+
+
+void error(const char *msg)
+{
+    perror(msg);
+    exit(1);
+}
+
+int onSend(int socket_fd,void* buf){
+	int i , n, totalBytes = 0;
+	int BytesPerRow = 4;//5120;//1280;//32;//512;//1280;	//640*2//
+	for(i=0; i < (BUFFER_SIZE/BytesPerRow); i++)
+	{
+		//n = write(socket_fd,buf+(BytesPerRow*i),BytesPerRow);		//send data
+		n = send(socket_fd,buf+(BytesPerRow*i),BytesPerRow,0);
+		if (n < 0) {
+			//error("ERROR writing to socket");
+			//close(newsockfd);
+			//close(sockfd);
+			return -1;
+		}
+
+		totalBytes += n;
+
+	}
+
+	return totalBytes;
+}
+
+
+void* copyBuffer(void* buffer)
+{
+
+	char data[BUFFER_SIZE];
+	bzero(data,BUFFER_SIZE);
+	return strcpy(data,buffer);
+
+}
+
+typedef struct _Frame
+{
+	int frame_size;
+	int index;
+	char data[BUFFER_SIZE];
+} Frame;
+
+Frame createFrame(int index, void* data){
+	Frame newFrame;
+
+	if(strlen(data)!=strlen(newFrame.data))
+		perror("ERROR createFrame");
+
+	newFrame.frame_size = BUFFER_SIZE;
+	newFrame.index = index;
+	bzero(newFrame.data,strlen(data));
+	strcpy(newFrame.data,data);
+
+	return newFrame;
+}
+
+
+int v4l2_init(int fd)
+{
+
+	//Retrieve the device’s capabilities
+	struct v4l2_capability cap;
+	if(ioctl(fd, VIDIOC_QUERYCAP, &cap) < 0){
+		perror("VIDIOC_QUERYCAP");
+		return 1;//exit(1);
+	}
+
+	if(!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)){
+		fprintf(stderr, "The device does not handle single-planar video capture.\n");
+		return 1;//exit(1);
+	}
+
+
+	/* you’ll need to use VIDIOC_S_FMT (set format) to tell your device. This is done using a v4l2_format structure:*/
+	struct v4l2_format format;
+	format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	format.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;//V4L2_PIX_FMT_MJPEG;
+	format.fmt.pix.width = 640;
+	format.fmt.pix.height = 480;
+
+	if(ioctl(fd, VIDIOC_S_FMT, &format) < 0){
+		perror("VIDIOC_S_FMT");
+		return 1;//exit(1);
+	}
+
+ 	//init mmap
+	/*Inform the device about your future buffers*/
+	struct v4l2_requestbuffers bufrequest;
+	bufrequest.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	bufrequest.memory = V4L2_MEMORY_MMAP;
+	bufrequest.count = 1;
+
+	if(ioctl(fd, VIDIOC_REQBUFS, &bufrequest) < 0){
+		perror("VIDIOC_REQBUFS");
+		return 1;//exit(1);
+	}
+
+	return 0;
+}
+
+int v4l2_capture(int fd)
+{
+
+ 	/*Allocate your buffers*/
+ 	struct v4l2_buffer bufferinfo;	//another v4l2_buffer stru
+ 	memset(&bufferinfo, 0, sizeof(bufferinfo));
+
+ 	bufferinfo.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+ 	bufferinfo.memory = V4L2_MEMORY_MMAP;
+ 	bufferinfo.index = 0;
+
+	// Put the buffer in the incoming queue.
+	if(ioctl(fd, VIDIOC_QBUF, &bufferinfo) < 0){
+		perror("VIDIOC_QBUF");
+		return 1;//exit(1);
+	}
+
+	// The buffer's waiting in the outgoing queue.
+	if(ioctl(fd, VIDIOC_DQBUF, &bufferinfo) < 0){
+		perror("VIDIOC_DQBUF");
+		return 1;//exit(1);
+	}
+
+	return 0;
+}
+
+enum MESSAGE_REQ {SEND_IMAGE_REQ = 1, CLOSE_REQ} ;
+
+int main(int argc, char *argv[])
+{
+     int sockfd, newsockfd, portno;
+     socklen_t clilen;
+     //char buffer[256];
+     struct sockaddr_in serv_addr, cli_addr;
+     int n;
+  //   int stopBindClientSocket = 0;
+
+//     if (argc < 2) {
+//         fprintf(stderr,"ERROR, no port provided\n");
+//         exit(1);
+//     }
+     sockfd = socket(AF_INET, SOCK_STREAM, 0);
+     //sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+     if (sockfd < 0)
+        error("ERROR opening socket");
+     bzero((char *) &serv_addr, sizeof(serv_addr));
+
+     if(argv[1]!=NULL)
+    	 portno = atoi(argv[1]);
+     else
+    	 portno = atoi(DEFAULTPORT);//atoi(argv[1]);
+     printf("PORT: %d\n",portno);
+
+     serv_addr.sin_family = AF_INET;		//hints.ai_family = AF_INET;
+     serv_addr.sin_addr.s_addr = INADDR_ANY;
+     serv_addr.sin_port = htons(portno);
+
+
+
+     //////////////create v4l2 device
+ 	int fd;
+	if((fd = open("/dev/video0", O_RDWR)) < 0){
+	 		perror("open");
+	 		return 1;//exit(1);
+	}
+ 	v4l2_init(fd);
+
+ 	/*Allocate your buffers*/
+ 	struct v4l2_buffer bufferinfo;	//another v4l2_buffer
+ 	memset(&bufferinfo, 0, sizeof(bufferinfo));
+
+ 	bufferinfo.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+ 	bufferinfo.memory = V4L2_MEMORY_MMAP;
+ 	bufferinfo.index = 0;
+
+ 	if(ioctl(fd, VIDIOC_QUERYBUF, &bufferinfo) < 0){
+ 		perror("VIDIOC_QUERYBUF");
+ 		return 1;//exit(1);
+ 	}
+
+ 	void* bufferYUYV = mmap(
+ 			NULL,
+ 			bufferinfo.length,
+ 			PROT_READ | PROT_WRITE,
+ 			MAP_SHARED,
+ 			fd,
+ 			bufferinfo.m.offset
+ 	);
+
+ 	if(bufferYUYV == MAP_FAILED){
+ 		perror("mmap");
+ 		return 1;//exit(1);
+ 	}
+
+ 	/*Get a frame*/
+	bufferinfo.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	bufferinfo.memory = V4L2_MEMORY_MMAP;
+	bufferinfo.index = 0; /* Queueing buffer index 0. */
+
+	// Activate streaming
+	int type = bufferinfo.type;
+	if(ioctl(fd, VIDIOC_STREAMON, &type) < 0){
+		perror("VIDIOC_STREAMON");
+		return 1;//exit(1);
+	}
+
+	 //printf("bind\n");
+     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
+         error("ERROR on binding");
+
+	 //printf("listen\n");
+	 listen(sockfd,5);
+
+	 clilen = sizeof(cli_addr);
+	 newsockfd = accept(sockfd,						//SOCKET ClientSocket accept(ListenSocket,NULL,NULL);
+						 (struct sockaddr *) &cli_addr,
+						 &clilen);				//wait for client
+	 if (newsockfd < 0)
+		  error("ERROR on accept");
+	 printf("connected to a client\n");
+	 int count = 0;
+	do
+ 	{
+
+
+		/////////READ MESSAGE
+ 	    char recvbuf[4];
+		//printf("waiting for a request\n");
+		//bzero(recvbuf,4);
+
+		//int nBytes = 0;
+		//while(!nBytes){
+			//nBytes = read(newsockfd,recvbuf,4);
+		//	nBytes = recv(newsockfd,recvbuf,4,0);
+		//	if (nBytes < 0)
+  	    //       error("ERROR reading from socket");
+		//	if (nBytes > 0) break;
+		//}
+		//printf("message: %d, bytes received: %d\n",recvbuf[0],nBytes);
+
+		int messageReq = recvbuf[0];
+
+
+		//if(messageReq == SEND_IMAGE_REQ)
+		{
+
+			//char* pbuffer = bufferYUYV;
+			//n = onSend(newsockfd, pbuffer)
+			//if (n < 0) {
+			//	error("ERROR writing to socket");
+			//	close(newsockfd);
+			//	close(sockfd);
+			//}
+
+			int i = 0;
+			int frm = count;
+
+				 memset(bufferYUYV, 0, BUFFER_SIZE);
+				 v4l2_capture(fd);
+			int nbytes = 4, sum = 0;
+			char* pbufferYUYV = bufferYUYV;
+			for(i = 0; i<614400; i+=nbytes){
+					 n = send(newsockfd,pbufferYUYV+i,nbytes,0);
+					 if (n < 0) {
+						 error("ERROR send to socket");
+						 close(newsockfd);
+						 close(sockfd);
+						}
+					 sum += nbytes;
+				}
+				 printf("total send %d\n",sum);
+
+
+
+
+			//char* rgb24_buf = (char*)malloc(921600);	//SIZE of one 640x480x3 RGB24 image in bytes
+			//memset(rgb24_buf,0,921600);
+
+			//char filename[20];
+			//snprintf(filename,20,"bitmap%d.bmp",count);
+			//cvtYUYV2RGBImage(bufferYUYV,640,480,3,rgb24_buf);
+			//createBMPfile(filename,rgb24_buf,640,480,3,0);
+
+		}//end if send image
+
+		if(messageReq == CLOSE_REQ){
+			//CLOSE SERVER
+			printf("request: close server\n");
+		    close(newsockfd);
+		}
+
+
+		count++;
+ 	}while(count< 20);
+
+
+
+//	 int i = 0;
+	 //
+
+/*	 //int n = 0;
+	 //char msg[20];
+//	 n = recv(newsockfd,msg,20,0);
+//	 printf("recv %s, %d\n",msg,n);
+
+
+	 snprintf(msg,20,"task %d",i);
+	 n = send(newsockfd,msg,20,0);
+	 printf("send %d\n",n);
+	 i++;
+//	 n = recv(newsockfd,msg,20,0);
+//	 printf("recv %s, %d\n",msg,n);
+	 snprintf(msg,20,"task %d",i);
+	 n = send(newsockfd,msg,20,0);
+	 printf("send %d\n",n);
+	 i++;
+//	 n = recv(newsockfd,msg,20,0);
+//	 printf("recv %s, %d\n",msg,n);
+	 snprintf(msg,20,"task %d",i);
+	 n = send(newsockfd,msg,20,0);
+	 printf("send %d\n",n);
+	 i++;
+//	 n = recv(newsockfd,msg,20,0);
+//	 printf("recv %s, %d\n",msg,n);
+	 snprintf(msg,20,"task %d",i);
+	 n = send(newsockfd,msg,20,0);
+	 printf("send %d\n",n);
+	 i++;
+	 do{
+	// n = recv(newsockfd,msg,20,0);
+//	 printf("recv %s, %d\n",msg,n);
+	 snprintf(msg,20,"task %d",i);
+	 n = send(newsockfd,msg,20,0);
+	 printf("send %d\n",n);
+	 i++;
+	 }while(i<10000);
+*/
+
+
+ /*	 int i = 0;
+ 	 int frm = 0;
+for(frm =0; frm <20; frm++){
+	 memset(bufferYUYV, 0, BUFFER_SIZE);
+	 v4l2_capture(fd);
+	 int nbytes = 4, sum = 0;
+	 char* pbufferYUYV = bufferYUYV;
+	for(i = 0; i<614400; i+=nbytes){
+		 //snprintf(msg,20,"task %d",i);
+		 n = send(newsockfd,pbufferYUYV+i,nbytes,0);
+		 sum += nbytes;
+	}
+	 printf("total send %d\n",sum);
+
+}
+
+*/
+
+	//shutdown(newsockfd,SHUT_WR);
+	close(newsockfd);
+	close(sockfd);
+
+	printf("close\n");
+
+
+     return 0;
+}
+
+/*
+		char* name = "buffer";
+		int size = strlen(name) + 5 + 4;	//5 + 1 + 5 + 4 +1 : image + \0 + 5-digits + .bmp + \0
+		char* filename = malloc(size);
+		snprintf(filename, size, "%s%d.bmp", name,i);
+		printf("%s \n",filename);
+	*/
