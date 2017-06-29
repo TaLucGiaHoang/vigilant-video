@@ -1,0 +1,329 @@
+/*
+ * server.c
+ *
+ *  Created on: Jul 4, 2016
+ *      Author: giahoang
+ */
+
+
+/* A simple server in the internet domain using TCP
+   The port number is passed as an argument */
+
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/stat.h>
+
+#include <sys/ioctl.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/videodev2.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>	//open() close() read() write()
+#include <stdlib.h>	//exit()
+
+#define DEFAULTPORT "27015"
+#define BUFFER_SIZE 614400	//YUYV 	//921600 bitmap RGB 24bit
+#define TOTAL_FRAMES	30
+
+void error(const char *msg)
+{
+    perror(msg);
+    exit(1);
+}
+
+int onSend(int socket_fd,void* buf){
+	int i , n, totalBytes = 0;
+	int BytesPerRow = 4;//5120;//1280;//32;//512;//1280;	//640*2//
+	for(i=0; i < (BUFFER_SIZE/BytesPerRow); i++)
+	{
+		n = write(socket_fd,buf+(BytesPerRow*i),BytesPerRow);		//send data
+
+		if (n < 0) {
+			//error("ERROR writing to socket");
+			//close(newsockfd);
+			//close(sockfd);
+			return -1;
+		}
+
+		totalBytes += n;
+
+	}
+
+	return totalBytes;
+}
+
+
+void* copyBuffer(void* buffer)
+{
+
+	char data[BUFFER_SIZE];
+	bzero(data,BUFFER_SIZE);
+	return strcpy(data,buffer);
+
+}
+
+typedef struct _Frame
+{
+	int frame_size;
+	int index;
+	char data[BUFFER_SIZE];
+} Frame;
+
+Frame createFrame(int index, void* data){
+	Frame newFrame;
+
+	if(strlen(data)!=strlen(newFrame.data))
+		perror("ERROR createFrame");
+
+	newFrame.frame_size = BUFFER_SIZE;
+	newFrame.index = index;
+	bzero(newFrame.data,strlen(data));
+	strcpy(newFrame.data,data);
+
+	return newFrame;
+}
+
+
+int v4l2_init(int fd)
+{
+
+	//Retrieve the device’s capabilities
+	struct v4l2_capability cap;
+	if(ioctl(fd, VIDIOC_QUERYCAP, &cap) < 0){
+		perror("VIDIOC_QUERYCAP");
+		return 1;//exit(1);
+	}
+
+	if(!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)){
+		fprintf(stderr, "The device does not handle single-planar video capture.\n");
+		return 1;//exit(1);
+	}
+
+
+	/* you’ll need to use VIDIOC_S_FMT (set format) to tell your device. This is done using a v4l2_format structure:*/
+	struct v4l2_format format;
+	format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	format.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;//V4L2_PIX_FMT_MJPEG;
+	format.fmt.pix.width = 640;
+	format.fmt.pix.height = 480;
+
+	if(ioctl(fd, VIDIOC_S_FMT, &format) < 0){
+		perror("VIDIOC_S_FMT");
+		return 1;//exit(1);
+	}
+
+ 	//init mmap
+	/*Inform the device about your future buffers*/
+	struct v4l2_requestbuffers bufrequest;
+	bufrequest.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	bufrequest.memory = V4L2_MEMORY_MMAP;
+	bufrequest.count = 1;
+
+	if(ioctl(fd, VIDIOC_REQBUFS, &bufrequest) < 0){
+		perror("VIDIOC_REQBUFS");
+		return 1;//exit(1);
+	}
+
+	return 0;
+}
+
+int v4l2_capture(int fd)
+{
+
+ 	/*Allocate your buffers*/
+ 	struct v4l2_buffer bufferinfo;	//another v4l2_buffer stru
+ 	memset(&bufferinfo, 0, sizeof(bufferinfo));
+
+ 	bufferinfo.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+ 	bufferinfo.memory = V4L2_MEMORY_MMAP;
+ 	bufferinfo.index = 0;
+
+	// Put the buffer in the incoming queue.
+	if(ioctl(fd, VIDIOC_QBUF, &bufferinfo) < 0){
+		perror("VIDIOC_QBUF");
+		return 1;//exit(1);
+	}
+
+	// The buffer's waiting in the outgoing queue.
+	if(ioctl(fd, VIDIOC_DQBUF, &bufferinfo) < 0){
+		perror("VIDIOC_DQBUF");
+		return 1;//exit(1);
+	}
+
+	return 0;
+}
+
+enum MESSAGE_REQ {SEND_IMAGE_REQ = 1, CLOSE_REQ} ;
+
+int main(int argc, char *argv[])
+{
+     int sockfd, newsockfd, portno;
+     socklen_t clilen;
+     //char buffer[256];
+     struct sockaddr_in serv_addr, cli_addr;
+     int n;
+  //   int stopBindClientSocket = 0;
+
+//     if (argc < 2) {
+//         fprintf(stderr,"ERROR, no port provided\n");
+//         exit(1);
+//     }
+     sockfd = socket(AF_INET, SOCK_STREAM, 0);
+     //sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+     if (sockfd < 0)
+        error("ERROR opening socket");
+     bzero((char *) &serv_addr, sizeof(serv_addr));
+
+     if(argv[1]!=NULL)
+    	 portno = atoi(argv[1]);
+     else
+    	 portno = atoi(DEFAULTPORT);//atoi(argv[1]);
+     printf("PORT: %d\n",portno);
+
+     serv_addr.sin_family = AF_INET;		//hints.ai_family = AF_INET;
+     serv_addr.sin_addr.s_addr = INADDR_ANY;
+     serv_addr.sin_port = htons(portno);
+
+
+
+     //////////////create v4l2 device
+ 	int fd;
+	if((fd = open("/dev/video0", O_RDWR)) < 0){
+	 		perror("open");
+	 		return 1;//exit(1);
+	}
+ 	v4l2_init(fd);
+
+ 	/*Allocate your buffers*/
+ 	struct v4l2_buffer bufferinfo;	//another v4l2_buffer
+ 	memset(&bufferinfo, 0, sizeof(bufferinfo));
+
+ 	bufferinfo.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+ 	bufferinfo.memory = V4L2_MEMORY_MMAP;
+ 	bufferinfo.index = 0;
+
+ 	if(ioctl(fd, VIDIOC_QUERYBUF, &bufferinfo) < 0){
+ 		perror("VIDIOC_QUERYBUF");
+ 		return 1;//exit(1);
+ 	}
+
+ 	void* bufferYUYV = mmap(
+ 			NULL,
+ 			bufferinfo.length,
+ 			PROT_READ | PROT_WRITE,
+ 			MAP_SHARED,
+ 			fd,
+ 			bufferinfo.m.offset
+ 	);
+
+ 	if(bufferYUYV == MAP_FAILED){
+ 		perror("mmap");
+ 		return 1;//exit(1);
+ 	}
+
+ 	/*Get a frame*/
+	bufferinfo.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	bufferinfo.memory = V4L2_MEMORY_MMAP;
+	bufferinfo.index = 0; /* Queueing buffer index 0. */
+
+	// Activate streaming
+	int type = bufferinfo.type;
+	if(ioctl(fd, VIDIOC_STREAMON, &type) < 0){
+		perror("VIDIOC_STREAMON");
+		return 1;//exit(1);
+	}
+
+	 //printf("bind\n");
+     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
+         error("ERROR on binding");
+
+	 //printf("listen\n");
+	 listen(sockfd,5);
+
+	 clilen = sizeof(cli_addr);
+	 newsockfd = accept(sockfd,						//SOCKET ClientSocket accept(ListenSocket,NULL,NULL);
+						 (struct sockaddr *) &cli_addr,
+						 &clilen);				//wait for client
+	 if (newsockfd < 0)
+		  error("ERROR on accept");
+	 printf("connected to a client\n");
+ 	do
+ 	{
+
+
+		/////////READ MESSAGE
+ 	    char recvbuf[4];
+		printf("waiting for a request\n");
+		bzero(recvbuf,4);
+
+		int nBytes = 0;
+		while(!nBytes){
+			nBytes = read(newsockfd,recvbuf,4);
+			if (nBytes < 0)
+  	           error("ERROR reading from socket");
+			if (nBytes > 0) break;
+		}
+		printf("message: %d, bytes received: %d\n",recvbuf[0],nBytes);
+
+		int messageReq = recvbuf[0];
+
+
+		if(messageReq == SEND_IMAGE_REQ)
+		{
+			/////////////////Send image
+			printf("request: send imge\n");
+			memset(bufferYUYV, 0, BUFFER_SIZE);
+			v4l2_capture(fd);
+
+			//int nFrames =  TOTAL_FRAMES;
+			//Frame frame[TOTAL_FRAMES];
+
+			//frame[frame.index] = createFrame(index)
+			//int sendFlag = 1;
+			char* pbuffer = bufferYUYV;
+			printf(".\n");
+			n = onSend(newsockfd, pbuffer);
+			printf(".\n");
+			if (n < 0) {
+				error("ERROR writing to socket");
+				close(newsockfd);
+				close(sockfd);
+			}
+			printf("sent %d bytes\n\n",n);
+			close(newsockfd);
+
+		}//end if send image
+
+		if(messageReq == CLOSE_REQ){
+			//CLOSE SERVER
+			printf("request: close server\n");
+		    close(newsockfd);
+			break;
+		}
+		//close(newsockfd);
+/*
+		char* name = "buffer";
+		int size = strlen(name) + 5 + 4;	//5 + 1 + 5 + 4 +1 : image + \0 + 5-digits + .bmp + \0
+		char* filename = malloc(size);
+		snprintf(filename, size, "%s%d.bmp", name,i);
+		printf("%s \n",filename);
+	*/
+
+ 	}while(1);//(stopBindClientSocket);
+
+     close(sockfd);
+
+
+     return 0;
+}
+
+//bzero(buffer,256);
+//n = read(sockfd,buffer,255);
+//if (n < 0)
+//     error("ERROR reading from socket");
