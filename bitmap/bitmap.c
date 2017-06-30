@@ -1,127 +1,123 @@
 /*
- ============================================================================
- Name        : bitmap.c
- Author      : 
- Version     :
- Copyright   : Your copyright notice
- Description : Hello World in C, Ansi-style
- ============================================================================
+  C console program
+
+  A plain black and white bitmap requires only a single bit to document each pixel.
+  the bitmap is monochrome, and the palette contains two entries.
+  each bit in the bitmap array represents a pixel. if the bit is clear,
+  the pixel is displayed with the color of the first entry in the palette;
+  if the bit is set, the pixel has the color of the second entry in the table.
+  This type of bitmap has a very small file size, and doesn't require a palette.
+
+  based on program bmpsuite.c by Jason Summers
+  http://entropymine.com/jason/bmpsuite/
+
+  Adam Majewski
+  fraktal.republika.pl
+
+  This app create a 2x2-pixel 24-bit BGR image
+
  */
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
+#include <stdio.h>
+#include <math.h>
 
-typedef struct myBitmap {
-	//14byte bitmap header
-	unsigned char byte_0 ;//= 0x42;	//'B'
-	unsigned char byte_1 ;//= 0x4D;	//'M'
-	size_t file_size_offset ;//= 0 ;//data.size() //	This will be the full size of the file including the header, the pixel data, and all padding
-	unsigned int byte_6_9 ;//= 0x00000000;
-	size_t pixel_info_offset_offset ;//= 54;//data.size();
-	//40byte bitmap information
-	unsigned char BitmapInfoHeader ;//= 40;	//byte 14-17
-	//Color Palette 4x bytes
-	unsigned int width;	//byte 18-21
-	unsigned int height;	//byte 22-25
-	//byte 26-27: the number of color plantes
-	unsigned char byte_26 ;//= 1;
-	unsigned char byte_27 ;//= 0;
-	//byte 28-29: the number of bits per pixel
-	unsigned char byte_28 ;//= 24;
-	unsigned char byte_29 ;//= 0;
-	//byte 30-33 disable compression
-	unsigned int unCompress ;//= 0;
-	size_t raw_pixel_array_size_offset ;//= 0;//size of raw data in pixel array, fill later
-	//byte 38-41
-	unsigned int horizontal_resolution ;//= 2835;
-	//byte 42-45
-	unsigned int vertical_resolution ;//= 2835;
-	//byte 46-49
-	unsigned int num_of_color ;//= 0;	//default to all colors
-	//byte 50-53
-	unsigned int important_color ;//= 0;	//default to all colors
+int fwriteData(FILE* fp,void* data, int width, int height, int nChannels, int padding){
+	int n;
+	int total_bytes = 0;
+	unsigned char *bytes = data;
+	int BytesPerRow = width*nChannels  + padding;	//	chia het cho 4
+	int BytesSize = BytesPerRow * height;
+	if(!fp){
+		perror("file not founded");
+	}
+	else
+		for(n = BytesPerRow; n <= BytesSize; n+=BytesPerRow){
+			total_bytes += fwrite(bytes+BytesSize-n,1,BytesPerRow,fp);
+		}
 
-	//Bitmap Data
-	void* data;
-} Bitmap;
-
-
- void createBitmap(void* data,size_t data_size, int width ,int height,Bitmap output){
-		//14byte bitmap header
-		output.byte_0 = 0x42;	//'B'
-		output.byte_1 = 0x4D;	//'M'
-		size_t file_size_offset = data_size;
-		//byte 2-5 file size
-		output.file_size_offset = 0xFFFFFFFF ;//	This will be the full size of the file including the header, the pixel data, and all padding
-		//byte 6-9
-		output.byte_6_9 = 0x00000000;
-		size_t pixel_info_offset_offset = data_size;
-		//byte 10-13 pixel offset
-		output.pixel_info_offset_offset = 0;	//fill later
-		//40byte bitmap information
-		output.BitmapInfoHeader = 40;	//byte 14-17
-		//Color Palette 4x bytes
-		output.width = width;	//byte 18-21
-		output.height = height;	//byte 22-25
-		//byte 26-27: the number of color plantes
-		output.byte_26 = 1;
-		output.byte_27 = 0;
-		//byte 28-29: the number of bits per pixel
-		output.byte_28 = 24;
-		output.byte_29 = 0;
-		//byte 30-33 disable compression
-		output.unCompress = 0;
-		size_t raw_pixel_array_size_offset = data_size;
-		output.raw_pixel_array_size_offset = 0;//size of raw data in pixel array, fill later
-		//byte 38-41
-		output.horizontal_resolution = 2835;
-		//byte 42-45
-		output.vertical_resolution = 2835;
-		//byte 46-49
-		output.num_of_color = 0;	//default to all colors
-		//byte 50-53
-		output.important_color = 0;	//default to all colors
-
-		uint32_t _data_size = data_size;
-
-
-		//Bitmap Data
-		output.data = data;
+	return total_bytes;
 }
-int main(int argc, char** argv)
-{
-	  //                          Blue                Purple
-	  //                       B     G     R      B    G     R     Padding
-	  //                      |--------------|  |--------------|  |--------|
-	 // unsigned char data[] = {0xFF, 0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0x00,
 
-	  /*                          Red                  Green*/
-	  /*                       B     G     R      B    G     R     Padding*/
-	  /*                      |--------------|  |--------------|  |--------|*/
-	 //                         0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0x00, 0x00
-	//  };
-    //unsigned char* output;
-//    size_t output_size ;//= bitmap_encode_rgb(data, 2, 2, &output);
-    //Bitmap file_bmp;
+// unsigned char : 1byte, short int 2 bytes, int 4 bytes, long int 8 bytes;	for Intel
+int createBMPfile(char* filename, void* data, int width, int height, int nChannels, int padding){
+	unsigned short int word[1]; /* 2 bytes */
+	unsigned int dword[1]; 		/* 4 bytes */
 
-    //void* data = header;
-//    FILE* file_output;
-//    file_output = fopen("output.bmp","w+");
+	unsigned int	Width= width,	Height=height;
+	/* in bytes */
+	unsigned int   FileHeaderSize=14,
+			InfoHeaderSize=40, // header_bytes
+			BytesPerRow,
+			FileSize,
+			OffsetBits,
+			BytesSize; // full size of the file including the header, the pixel data, and all padding
 
-    /*
-    ptr − This is the pointer to the array of elements to be written.
+	//PRINT
+	BytesPerRow = Width*nChannels  + padding;	//(((Width * bpp)+31)/32)*4;	chia het cho 4
+	BytesSize = BytesPerRow*Height;	//kich thuoc data anh tinh theo byte
+	FileSize = FileHeaderSize+InfoHeaderSize+BytesSize;	//+PaletteSize;
+	OffsetBits = FileHeaderSize+InfoHeaderSize;//+PaletteSize;
 
-    size − This is the size in bytes of each element to be written.
+	//	printf("BytesPerRow= %d\n", BytesPerRow);
+	//	printf("BytesSize= %d\n", BytesSize);
+	//	printf("FileSize= %d\n", FileSize);
+	//	printf("OffsetBits= %d\n", OffsetBits);
 
-    nmemb − This is the number of elements, each one with a size of size bytes.
 
-    stream − This is the pointer to a FILE object that specifies an output stream.
-    */
-//    fwrite(data,1,sizeof(output_size),file_output);
-    //file_output.write((const char*)output, output_size,);
-//    fclose(file_output);
+	FILE *fp = fopen(filename, "wb"); /* b - binary mode */
+	if(!fp){
+		perror("file not founded");
+		return -1;
+	}
+	/* bmp file header */
+	word[0]=19778;                                         fwrite(word,1,2,fp); /* file Type signature = BM */
+	dword[0]=FileSize;                                     fwrite(dword,1,4,fp); /* FileSize */
+	word[0]=0;                                             fwrite(word,1,2,fp); /* reserved1 */
+	word[0]=0;                                             fwrite(word,1,2,fp); /* reserved2 */
+	dword[0]=OffsetBits;                                   fwrite(dword,1,4,fp); /* OffsetBits */
+	dword[0]=InfoHeaderSize;                               fwrite(dword,1,4,fp);
+	dword[0]=Width;                                        fwrite(dword,1,4,fp);
+	dword[0]=Height;                                       fwrite(dword,1,4,fp);
+	word[0]=1;                                             fwrite(word,1,2,fp); /* planes */	//The number of color planes, must be set to 1
+	word[0]=24;                                            fwrite(word,1,2,fp); /* Bits of color per pixel */ //The number of bits per pixel. For an RGB image with a single byte for each color channel the value would be 24
+	dword[0]=0;                                            fwrite(dword,1,4,fp); /* compression type */	// 0: no compression
+	dword[0]=BytesSize;                                    fwrite(dword,1,4,fp); /* Image Data Size, set to 0 when no compression */
+	dword[0]=2835;                                         fwrite(dword,1,4,fp); /* This is the horizontal resolution */
+	dword[0]=2835;                                         fwrite(dword,1,4,fp); /* This is the vertical resolution */
+	dword[0]=0;                                            fwrite(dword,1,4,fp); /*  number of used colors, default:0 all colors*/
+	dword[0]=0;                                            fwrite(dword,1,4,fp); /* The important colors, leave at 0 to default to all colors */
 
-    return 0;
+	//pixel data
+	int data_size;
+	data_size = fwriteData(fp,data,Width,Height,nChannels,padding); // bmp image data need to be inverted when writing  
+
+	fclose(fp);
+	printf("file saved %s\n",filename);
+	return data_size + 54;	// header 54 bytes
 }
+
+
+int main() {
+
+	//                          Blue                Purple
+	//                       B     G     R      B    G     R     Padding
+	//                      |--------------|  |--------------|  |--------|
+	unsigned char data[] = {0xFF, 0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0x00,
+
+	//                          Red                  Green
+	//                       B     G     R      B    G     R     Padding
+	//                      |--------------|  |--------------|  |--------|
+				0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0x00, 0x00
+	};
+
+	int n = createBMPfile("BGR24_2x2.bmp",data,2,2,3,2); 	// image size = 16 data bytes + 54 header bytes = 70 bytes
+	printf("total_bytes %d\n",n);
+
+	return 0;
+}
+
+
+
+
 
