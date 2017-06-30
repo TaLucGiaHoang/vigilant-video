@@ -4,17 +4,29 @@
 #include <math.h>
 
 #define HEADER_SIZE 54
+
+int freadData(FILE* fp,void* data, int width, int height, int nChannels, int padding){
+	int n;
+	int total_bytes = 0;
+	unsigned char *bytes = data;
+	int BytesPerRow = width*nChannels  + padding;	//	chia het cho 4
+	int BytesSize = BytesPerRow * height;
+	if(!fp){
+		perror("file not founded");
+	}
+	else
+		for(n = BytesPerRow; n <= BytesSize; n+=BytesPerRow){
+			total_bytes += fwrite(bytes+BytesSize-n,1,BytesPerRow,fp);
+		}
+
+	return total_bytes;
+}
+
 int main(int argc, char* argv[]) {
 	//int n = 70;
-	int width = 2;
-	int height = 2;
-	int padding = 2;
-	int nChannels = 3;
+
 	
-	int _BytesPerRow = width*nChannels  + padding;
-	char *data;
-	data = (char*)malloc(height*_BytesPerRow*sizeof(char));
-	printf("data size %ld\n",sizeof(data));
+
 	
 	char filename[] = "BGR24_2x2.bmp";
 	FILE *fp = fopen(filename, "rb"); /* b - binary mode */
@@ -24,8 +36,8 @@ int main(int argc, char* argv[]) {
 	}
 
 	char readbuf[100];
-	int nread = fread(readbuf, sizeof(char), sizeof(readbuf), fp);
-	printf("nread %d\n",nread);
+	//int nread = fread(readbuf, sizeof(char), sizeof(readbuf), fp);
+	//printf("nread %d\n",nread);
 	
 	
 	
@@ -37,13 +49,11 @@ int main(int argc, char* argv[]) {
 	unsigned int	Width,	Height;
 	/* in bytes */
 	unsigned int
-			FileHeaderSize,
+			//FileHeaderSize,
+			InfoHeaderSize,
 			FileSize,
-			InfoHeaderSize, // header_bytes
-			BytesPerRow,
-			
-			OffsetBits,
-			
+			//BytesPerRow,		
+			OffsetBits,		
 			nColorPlanes,
 			BitsPerPixel,
 			CompressType,
@@ -59,8 +69,8 @@ int main(int argc, char* argv[]) {
 	fread(word,1,2,fp); 									/* reserved2 */
 	fread(dword,1,4,fp);		OffsetBits=dword[0];		/* OffsetBits */
 	fread(dword,1,4,fp);		InfoHeaderSize=dword[0];
-	fread(dword,1,4,fp);		Width=dword[0];
-	fread(dword,1,4,fp);		Height=dword[0];
+	fread(dword,1,4,fp);		Width=dword[0];				/* Width */
+	fread(dword,1,4,fp);		Height=dword[0];			/* Height */
 	fread(word,1,2,fp); 		nColorPlanes = word[0]; 	/* planes */	//The number of color planes, must be set to 1
 	fread(word,1,2,fp);			BitsPerPixel=word[0];		/* Bits of color per pixel */ //The number of bits per pixel. For an RGB image with a single byte for each color channel the value would be 24
 	fread(dword,1,4,fp); 		CompressType=dword[0];		/* compression type */	// 0: no compression
@@ -75,23 +85,41 @@ int main(int argc, char* argv[]) {
 	
 	printf("%s \n",readbuf);
 	printf("header info:\n");
-	printf("file type signature %s\n",FileType);
+	printf("FileType %c%c\n",FileType[0],FileType[1]);
+	printf("FileSize = %d\n", FileSize);
+	printf("OffsetBits = %d\n", OffsetBits);
+	printf("InfoHeaderSize = %d\n", InfoHeaderSize);
+	printf("Width = %d\n", Width);
+	printf("Height = %d\n", Height);
+	printf("nColorPlanes = %d\n", nColorPlanes);
+	printf("BitsPerPixel = %d\n", BitsPerPixel);
+	printf("CompressType = %d\n", CompressType);
+	printf("BytesSize = %d\n", BytesSize);
+	printf("HorizontalResolution = %d\n", HorizontalResolution);
+	printf("VerticalResolution = %d\n", VerticalResolution);
+	printf("NumOfUsedColors = %d\n", NumOfUsedColors);
+	printf("ImportantColors = %d\n", ImportantColors);	
 	
-	printf("BytesPerRow= %d\n", BytesPerRow);
-	printf("BytesSize= %d\n", BytesSize);
-	printf("FileSize= %d\n", FileSize);
-	printf("OffsetBits= %d\n", OffsetBits);
+	/* data info */
+	int BytesPerRow = width*nChannels  + padding;
+	int width = Width;
+	int height = Height;
+	int padding = 2;
+	int nChannels = 3;		// 24bit RGB
+	char *data;
+	data = (char*)malloc(height*BytesPerRow*sizeof(char));
+	printf("data size %ld\n",sizeof(data));
+
+	// int i;
+	// for(i = 0; i < HEADER_SIZE; i++)
+		// printf("%x\n",readbuf[i]);
 	
-	int i;
-	for(i = 0; i < HEADER_SIZE; i++)
-		printf("%x\n",readbuf[i]);
+	// printf("data info:\n");
+	// int count = 0;
 	
-	printf("data info:\n");
-	int count = 0;
-	
-	for(; i < nread; i++){
+/* 	for(; i < nread; i++){
 		
-		if(count % (_BytesPerRow) == 0)
+		if(count % (BytesPerRow) == 0)
 		{
 			printf("\n");
 			//count += padding;	// skip padding
@@ -100,7 +128,7 @@ int main(int argc, char* argv[]) {
 		
 		printf("%.2x  ",readbuf[i]);
 		count++;
-	}
+	} */
 		
 	printf("\n");
 	fclose(fp);
