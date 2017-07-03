@@ -5,27 +5,11 @@
 
 #define HEADER_SIZE 54
 
-int freadData(FILE* fp,void* data, int width, int height, int nChannels, int padding){
-	int n;
-	int total_bytes = 0;
-	unsigned char *bytes = data;
-	int BytesPerRow = width*nChannels  + padding;	//	chia het cho 4
-	int BytesSize = BytesPerRow * height;
-	if(!fp){
-		perror("file not founded");
-	}
-	else
-		for(n = BytesPerRow; n <= BytesSize; n+=BytesPerRow){
-			total_bytes += fwrite(bytes+BytesSize-n,1,BytesPerRow,fp);
-		}
-
-	return total_bytes;
-}
 
 /*
  * data: output 
  */
-int readBMPFile(char* filename, char* data, int width, int height, int nChannels, int padding)
+int readBMPFile(char* filename, char* data,int nChannels, int padding)
 {
 	/* Print image information */
 	/* Print header */
@@ -44,7 +28,7 @@ int readBMPFile(char* filename, char* data, int width, int height, int nChannels
 			nColorPlanes,
 			BitsPerPixel,
 			CompressType,
-			BytesSize, 
+			DataSize, 
 			HorizontalResolution,
 			VerticalResolution,
 			NumOfUsedColors,
@@ -69,7 +53,7 @@ int readBMPFile(char* filename, char* data, int width, int height, int nChannels
 	fread(word,1,2,fp); 		nColorPlanes = word[0]; 	/* planes */	//The number of color planes, must be set to 1
 	fread(word,1,2,fp);			BitsPerPixel=word[0];		/* Bits of color per pixel */ //The number of bits per pixel. For an RGB image with a single byte for each color channel the value would be 24
 	fread(dword,1,4,fp); 		CompressType=dword[0];		/* compression type */	// 0: no compression
-	fread(dword,1,4,fp); 		BytesSize=dword[0];			/* Image Data Size, set to 0 when no compression */
+	fread(dword,1,4,fp); 		DataSize=dword[0];			/* Image Data Size, set to 0 when no compression */
 	fread(dword,1,4,fp); 		HorizontalResolution=dword[0];		/* This is the horizontal resolution */
 	fread(dword,1,4,fp); 		VerticalResolution=dword[0];		/* This is the vertical resolution */
 	fread(dword,1,4,fp); 		NumOfUsedColors=dword[0];			/*  number of used colors, default:0 all colors*/
@@ -85,50 +69,35 @@ int readBMPFile(char* filename, char* data, int width, int height, int nChannels
 	printf("InfoHeaderSize = %d\n", InfoHeaderSize);
 	printf("Width = %d\n", Width);
 	printf("Height = %d\n", Height);
-	printf("nColorPlanes = %d\n", nColorPlanes);
+	//printf("nColorPlanes = %d\n", nColorPlanes);
 	printf("BitsPerPixel = %d\n", BitsPerPixel);
 	// printf("CompressType = %d\n", CompressType);
-	printf("BytesSize = %d\n", BytesSize);
+	printf("DataSize = %d\n", DataSize);
 	// printf("HorizontalResolution = %d\n", HorizontalResolution);
 	// printf("VerticalResolution = %d\n", VerticalResolution);
 	// printf("NumOfUsedColors = %d\n", NumOfUsedColors);
 	// printf("ImportantColors = %d\n", ImportantColors);	
 	
 	/* data info */
-	
-	//int width = Width;
-	//int height = Height;
-	//int padding = 2;
-	//int nChannels = 3;		// 24bit RGB
-	//char *data;
-	int BytesPerRow = width*nChannels  + padding;
-	int dataSize = height*BytesPerRow*sizeof(char);	// equal BytesSize
-	printf("dataSize = %d\n", dataSize);
 
-	data = (char*)malloc(BytesSize);//data = (char*)malloc(dataSize);
+	int BytesPerRow = Width*nChannels  + padding;
 
-	//fread(data,dataSize,sizeof(char),fp);	// READ ALL DATA 
+	data = (char*)malloc(DataSize);//data = (char*)malloc(dataSize);
 
-	printf("read data per line\n" );
+	//fread(data,DataSize,sizeof(char),fp);	// READ ALL DATA 
+
+
 	int n;
-	for(n = BytesPerRow; n <= BytesSize; n+=BytesPerRow){
-		total_bytes += fread(data+BytesSize-n,1,BytesPerRow,fp);	// khong doc padding
+	for(n = BytesPerRow; n <= DataSize; n+=BytesPerRow){
+		total_bytes += fread(data+DataSize-n,1,BytesPerRow,fp);	
 	}
 	int i;
 	
 	printf("data info:\n");
-	int CountInLine = 0;
-	//freadData(fp,)
- 	for(; i < dataSize; i++, CountInLine++){
-		
-		if(i % (width*nChannels) == 0)
-		{
+ 	for(i = 0; i < DataSize; i++){
+		if(i % BytesPerRow == 0)
 			printf("\n");
-			//i += 2;	// skip padding
-		}
-		//else	
-			printf("%.2x  ",data[i]);
-		///count++;
+		printf("%.2x  ",data[i]);
 	} 
 		
 
@@ -142,7 +111,7 @@ int main(int argc, char* argv[]) {
 	//int n = 70;
 
 	
-
+	char lena[30] = "Lenna-512x512-24bit.bmp";
 	
 	char filename[] = "BGR24_2x2.bmp";
 
@@ -152,8 +121,8 @@ int main(int argc, char* argv[]) {
 	int padding = 2;
 	int nChannels = 3;		// 24bit RGB
 	char* data = NULL;
-readBMPFile(filename, data, width, height, nChannels, padding);
-	
+	readBMPFile(filename, data, nChannels, padding);
+	readBMPFile(lena, data, nChannels, 0);
 	
 	
 

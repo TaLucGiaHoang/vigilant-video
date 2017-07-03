@@ -1,28 +1,23 @@
 /*
   C console program
-
   A plain black and white bitmap requires only a single bit to document each pixel.
   the bitmap is monochrome, and the palette contains two entries.
   each bit in the bitmap array represents a pixel. if the bit is clear,
   the pixel is displayed with the color of the first entry in the palette;
   if the bit is set, the pixel has the color of the second entry in the table.
   This type of bitmap has a very small file size, and doesn't require a palette.
-
   based on program bmpsuite.c by Jason Summers
   http://entropymine.com/jason/bmpsuite/
-
   Adam Majewski
   fraktal.republika.pl
-
   This app create a 2x2-pixel 24-bit BGR image
-
  */
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 
-int fwriteData(FILE* fp,void* data, int width, int height, int nChannels, int padding){
+int fwriteBMPData(FILE* fp,void* data, int width, int height, int nChannels, int padding){
 	int n;
 	int total_bytes = 0;
 	unsigned char *bytes = data;
@@ -90,7 +85,7 @@ int createBMPfile(char* filename, void* data, int width, int height, int nChanne
 
 	//pixel data
 	int data_size;
-	data_size = fwriteData(fp,data,Width,Height,nChannels,padding); // bmp image data need to be inverted when writing  
+	data_size = fwriteBMPData(fp,data,Width,Height,nChannels,padding); // bmp image data need to be inverted when writing  
 
 	fclose(fp);
 	printf("file saved %s\n",filename);
@@ -103,12 +98,12 @@ int main() {
 	//                          Blue                Purple
 	//                       B     G     R      B    G     R     Padding
 	//                      |--------------|  |--------------|  |--------|
-	unsigned char data[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x00, 0x00,
+	unsigned char data[] = {0xff, 0x02, 0x03, 0x04, 0xff, 0x06, 0x00, 0x00,
 
 	//                          Red                  Green
 	//                       B     G     R      B    G     R     Padding
 	//                      |--------------|  |--------------|  |--------|
-				0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16
+				0x09, 0x10, 0xff, 0x12, 0x13, 0x14, 0x15, 0x16
 	};
 
 	int n = createBMPfile("BGR24_2x2.bmp",data,2,2,3,2); 	// image size = 16 data bytes + 54 header bytes = 70 bytes
@@ -116,7 +111,3 @@ int main() {
 
 	return 0;
 }
-
-
-
-
